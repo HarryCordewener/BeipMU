@@ -1,0 +1,90 @@
+#pragma once
+//
+// MXP (MUD eXtension Protocol)
+// https://www.zuggsoft.com/zmud/mxp.htm
+//
+// TextToLine owns one of these. It is fed through the same '<' and '&' hooks the
+// Pueblo parser uses, plus ESC [ n z for the line modes. The connection takes the
+// replies (VERSION, SUPPORT) and the images after each line.
+//
+namespace MXP
+{
+
+enum struct Mode
+{
+   Open,   // Only open tags (formatting) are parsed, the rest is shown as typed
+   Secure, // All tags are parsed
+   Locked, // No tags are parsed
+};
+
+struct Image
+{
+   OwnedString m_url;
+   OwnedString m_name;
+   int m_height{}; // In pixels, 0 means the banner's default
+};
+
+struct Parser
+{
+   void Reset(); // New connection, or ESC[3z
+
+   void BeginLine();
+   void EndLine(Text::LineBuilder &line_builder); // Auto-closes open tags and reverts the mode
+
+   // Called after ESC has been read. Returns false if this is not ESC [ n z, with the stream untouched
+   bool ParseLineTag(Streams::Input &stream, Text::LineBuilder &line_builder);
+
+   // Called after '<' has been read. Returns false if the tag should be shown as text, with the stream untouched
+   bool ParseTag(Streams::Input &stream, Text::HTMLParser &html, Text::LineBuilder &line_builder);
+
+   void NotATag() { m_temp_secure=false; }
+   bool ParsesEntities() const { return CurrentMode()!=Mode::Locked; }
+
+   // What the connection does after the line
+   Collection<OwnedString> m_replies; // Send these to the server as is
+   Collection<Image> m_images;        // Show these under the line
+
+private:
+
+   enum struct Tag
+   {
+      Bold, Italic, Underline, Strikeout, Color, Send, Anchor,
+   };
+
+   struct Frame
+   {
+      Tag m_tag;
+      bool m_opened_in_open_mode;
+
+      // What the tag changed, so the close can put it back
+      bool m_bold{}, m_italic{}, m_underline{}, m_strikeout{};
+      Text::Records::Color m_color{};
+      Text::Records::ColorBg m_color_bg{};
+   };
+
+   Mode CurrentMode() const { return m_line_mode; }
+   bool IsSecure() const { return m_line_mode==Mode::Secure || m_temp_secure; }
+
+   void Open(Tag tag, Text::LineBuilder &line_builder, Frame &frame);
+   bool Close(Tag tag, Text::LineBuilder &line_builder);
+   void Restore(const Frame &frame, Text::LineBuilder &line_builder);
+   void CloseOpenModeTags(Text::LineBuilder &line_builder);
+
+   bool HandleSend(Streams::Input &stream, Text::HTMLParser &html, Text::LineBuilder &line_builder);
+   bool HandleAnchor(Text::HTMLParser &html, Text::LineBuilder &line_builder);
+   bool HandleColor(Text::HTMLParser &html, Text::LineBuilder &line_builder, Frame &frame);
+   bool HandleImage(Text::HTMLParser &html, Text::LineBuilder &line_builder);
+   void HandleVersion();
+   void HandleSupport();
+
+   Mode m_default_mode{Mode::Open}; // Set by ESC[5z..7z, restored at every line end
+   Mode m_line_mode{Mode::Open};    // Set by ESC[0z..2z, lasts until the line end
+   bool m_temp_secure{};            // ESC[4z, spent by the very next tag
+
+   Collection<Frame> m_stack;
+};
+
+// The URL an IMAGE tag names, or empty if it is not http(s)
+OwnedString ResolveImageURL(ConstString fname, ConstString url, ConstString type);
+
+}

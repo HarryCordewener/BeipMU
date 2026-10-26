@@ -200,7 +200,8 @@ void Connection::OnPrompt(ConstString string)
       RemovePrompt();
 
       m_timer_prompt.Reset();
-      auto p_line=m_text_to_line.Parse(string, m_pueblo, m_ppropServer->eEncoding());
+      auto p_line=m_text_to_line.Parse(string, m_pueblo, m_ppropServer->eEncoding(), m_mxp);
+      SendMXPReplies();
       mp_prompt=*p_line;
       GetOutput().Add(std::move(p_line));
    }
@@ -864,6 +865,10 @@ void Connection::Disconnect()
    mp_MCP=nullptr;
    mp_MCMP=nullptr;
    m_pueblo=false;
+   m_mxp=false; // Has to be negotiated again on the next socket, and the modes start clean
+   m_telnet_parser.m_mxp=false;
+   m_text_to_line.m_mxp.Reset();
+   m_mxp_images.Empty();
    m_line_image_url.Clear();
    mp_line_avatar_info=nullptr;
 
@@ -1146,7 +1151,8 @@ void Connection::Display(ConstString string)
    // Disabled due to the ansi test sending through the Receive function and winding up
    // here, as it must act as though the text was sent from a server!
    // Assert(m_ppropServer); // We should always have at least one of these
-   auto pTL=m_text_to_line.Parse(string, m_pueblo, m_ppropServer ? m_ppropServer->eEncoding() : Prop::Server::Encoding::UTF8);
+   auto pTL=m_text_to_line.Parse(string, m_pueblo, m_ppropServer ? m_ppropServer->eEncoding() : Prop::Server::Encoding::UTF8, m_mxp);
+   SendMXPReplies();
 
    if(mp_line_avatar_info)
    {
@@ -1190,7 +1196,26 @@ void Connection::Display(ConstString string)
       }
    }
 
+   if(m_mxp)
+      m_mxp_images=std::move(m_text_to_line.m_mxp.m_images);
    Display(std::move(pTL));
+}
+
+void Connection::SendMXPReplies()
+{
+   if(!m_mxp)
+      return;
+
+   // <VERSION> and <SUPPORT> answers. They go straight to the socket: they are not something the user typed.
+   for(auto &reply : m_text_to_line.m_mxp.m_replies)
+      RawSend(ConstString(reply));
+   m_text_to_line.m_mxp.m_replies.Empty();
+}
+
+void Connection::OnMXP()
+{
+   m_mxp=true;
+   m_text_to_line.m_mxp.Reset();
 }
 
 void Connection::TriggerDebugText(ConstString background_color, ConstString stroke_color, ConstString indent, ConstString message)
@@ -1207,6 +1232,10 @@ void Connection::AliasDebugText(ConstString background_color, ConstString stroke
 
 void Connection::Display(UniquePtr<Text::Line> &&p_line)
 {
+   // Taken first, so a line that returns early cannot leave its pictures for the next one
+   auto mxp_images=std::move(m_mxp_images);
+   m_mxp_images.Empty();
+
    // Handle \grab prefixes
    if(m_grab_prefix && p_line->GetText().StartsWith(m_grab_prefix))
    {
@@ -1352,11 +1381,23 @@ void Connection::Display(UniquePtr<Text::Line> &&p_line)
 
    if(g_ppropGlobal->fInlineImages())
    {
-      if(auto urls=p_line->GetImageUrls())
+      auto urls=p_line->GetImageUrls();
+      if(urls || mxp_images.Count())
       {
          auto p_banner=MakeCounting<ImageBanner>();
          for(auto &url : urls)
             p_banner->AddURL(std::move(url));
+
+         // MXP <IMAGE>: the label is in the line, the picture goes in the banner under it.
+         // A height the server asked for wins over the default; the tallest one if there are several.
+         int requested_height=0;
+         for(auto &image : mxp_images)
+         {
+            p_banner->AddURL(Text::ImageURL{ConstString(image.m_url)});
+            requested_height=std::max(requested_height, image.m_height);
+         }
+         if(requested_height)
+            p_banner->m_height=requested_height;
 
          Text::LineBuilder line_builder;
          line_builder.AppendBanner(p_banner);
