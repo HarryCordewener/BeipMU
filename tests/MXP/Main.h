@@ -26,6 +26,7 @@ struct ConstString
    bool StartsWith(ConstString s) const { return v.substr(0, s.v.size())==s.v; }
    bool EndsWith(char c) const { return !v.empty() && v.back()==c; }
    bool IStartsWith(ConstString s) const { return v.size()>=s.v.size() && ieq(v.substr(0,s.v.size()), s.v); }
+   ConstString First(unsigned n) const { return v.substr(0, std::min<size_t>(n, v.size())); }
    ConstString WithoutFirst(unsigned n) const { return v.substr(std::min<size_t>(n, v.size())); }
    int Find(ConstString s) const { auto p=v.find(s.v); return p==std::string_view::npos ? -1 : (int)p; }
    bool Split(char c, ConstString &l, ConstString &r) const { auto p=v.find(c); if(p==std::string_view::npos) return false; auto c2=v; l=c2.substr(0,p); r=c2.substr(p+1); return true; }
@@ -161,7 +162,9 @@ struct HTMLParser
       unsigned char q=s.CharSpy();
       if(q=='"' || q=='\'') { s.CharGet(); unsigned p=s.pos; while(s.CharSpy() && s.CharSpy()!=q) s.CharGet(); if(!s.CharSpy()) return false; value=s.text.v.substr(p, s.pos-p); s.CharGet(); r.NoRestore(); return true; }
       unsigned p=s.pos; while(s.CharSpy() && s.CharSpy()!=' ' && s.CharSpy()!='>' && !(s.CharSpy()=='/' && s.text.v.substr(s.pos,2)=="/>")) s.CharGet();
-      if(p==s.pos) return false; value=s.text.v.substr(p, s.pos-p); r.NoRestore(); return true;
+      if(p==s.pos)
+         return false;
+      value=s.text.v.substr(p, s.pos-p); r.NoRestore(); return true;
    }
    bool ParseAttribute(Attribute &a)
    {

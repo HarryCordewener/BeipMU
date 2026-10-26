@@ -869,6 +869,7 @@ void Connection::Disconnect()
    m_telnet_parser.m_mxp=false;
    m_text_to_line.m_mxp.Reset();
    m_mxp_images.Empty();
+   m_mxp_figures.Empty();
    m_line_image_url.Clear();
    mp_line_avatar_info=nullptr;
 
@@ -1233,7 +1234,32 @@ void Connection::AliasDebugText(ConstString background_color, ConstString stroke
 void Connection::Display(UniquePtr<Text::Line> &&p_line)
 {
    // Taken first, so a line that returns early cannot leave its pictures for the next one
-   auto mxp_images=std::move(m_mxp_images);
+   Collection<MXP::Image> mxp_images;
+
+   // A figure the server laid out in cells (H=8c) has rows of the box still to come. Putting
+   // the picture under its first row would cut the box in two, so it waits until the last row
+   // has arrived and goes under that: after the box rather than inside it.
+   for(unsigned i=0;i<m_mxp_figures.Count();)
+   {
+      if(--m_mxp_figures[i].m_rows>0)
+      {
+         i++;
+         continue;
+      }
+      mxp_images.Push(std::move(m_mxp_figures[i]));
+      m_mxp_figures.Delete(i);
+   }
+
+   for(auto &image : m_mxp_images)
+   {
+      if(image.m_rows>1)
+      {
+         image.m_rows--; // This line was the first of them
+         m_mxp_figures.Push(std::move(image));
+      }
+      else
+         mxp_images.Push(std::move(image));
+   }
    m_mxp_images.Empty();
 
    // Handle \grab prefixes

@@ -29,8 +29,13 @@ UniquePtr<Text::Line> TextToLine::Parse(ConstString string, bool use_pueblo, Pro
 
    while(unsigned char c=stream.CharGet())
    {
-      if(use_mxp && c!='<')
-         m_mxp.NotATag(); // TEMP SECURE (ESC[4z) only covers a tag that comes straight after it
+      if(use_mxp)
+      {
+         if(m_mxp.PayBlank(c))
+            continue; // A blank a cell-sized IMAGE's label is standing in for
+         if(c!='<')
+            m_mxp.NotATag(); // TEMP SECURE (ESC[4z) only covers a tag that comes straight after it
+      }
 
       switch(c)
       {

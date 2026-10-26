@@ -22,6 +22,7 @@ struct Image
    OwnedString m_url;
    OwnedString m_name;
    int m_height{}; // In pixels, 0 means the banner's default
+   int m_rows{};   // H=8c: the server left this many rows for the picture, starting with the tag's own
 };
 
 struct Parser
@@ -38,6 +39,9 @@ struct Parser
    bool ParseTag(Streams::Input &stream, Text::HTMLParser &html, Text::LineBuilder &line_builder);
 
    void NotATag() { m_temp_secure=false; }
+
+   // True if this character is one of the blanks a cell-sized IMAGE's label stands in for, so it is not shown
+   bool PayBlank(char c);
    bool ParsesEntities() const { return CurrentMode()!=Mode::Locked; }
 
    // What the connection does after the line
@@ -74,12 +78,14 @@ private:
    bool HandleAnchor(Text::HTMLParser &html, Text::LineBuilder &line_builder);
    bool HandleColor(Text::HTMLParser &html, Text::LineBuilder &line_builder, Frame &frame);
    bool HandleImage(Text::HTMLParser &html, Text::LineBuilder &line_builder);
+   static bool ParseExtent(ConstString text, unsigned &value, bool &in_cells);
    void HandleVersion();
    void HandleSupport();
 
    Mode m_default_mode{Mode::Open}; // Set by ESC[5z..7z, restored at every line end
    Mode m_line_mode{Mode::Open};    // Set by ESC[0z..2z, lasts until the line end
    bool m_temp_secure{};            // ESC[4z, spent by the very next tag
+   unsigned m_owed_blanks{};        // Blanks after a cell-sized IMAGE that its label already took the place of
 
    Collection<Frame> m_stack;
 };

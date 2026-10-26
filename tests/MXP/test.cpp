@@ -13,6 +13,7 @@ static std::string Line(MXP::Parser &mxp, Text::LineBuilder &lb, std::string_vie
    mxp.BeginLine();
    while(unsigned char c=stream.CharGet())
    {
+      if(mxp.PayBlank(c)) continue;
       if(c!='<') mxp.NotATag();
       switch(c)
       {
@@ -108,6 +109,15 @@ int main()
       Expect("and does not reach the next line", Line(m, lb, "plain"), "plain");
       Expect("br", Line(m, lb, "\x1b[1za<br>b"), "a{BR}b");
       Expect("nested close unwinds inner", Line(m, lb, "<b><i>x</b>y"), "{B}{I}x{/I}{/B}y");
+   }
+   {
+      MXP::Parser m; Text::LineBuilder lb;
+      Expect("a cell-sized label takes the place of blanks", Line(m, lb, "\x1b[1z|<image a.png url=\"https://x/\" w=10c h=4c>          |"), "|🖼️a.png   |");
+      Expect("and records its rows", m.m_images.Count()==1 ? std::to_string(m.m_images[0].m_rows) : "", "4");
+      Expect("a long name is elided to the width", Line(m, lb, "\x1b[1z|<image longname.png url=\"https://x/\" w=6c h=2c>      |"), "|🖼️lon…|");
+      Expect("text where the blanks should be is kept", Line(m, lb, "\x1b[1z<image a.png url=\"https://x/\" w=10c>xyz  q"), "🖼️a.pngxyz  q");
+      Expect("no cell width swallows nothing", Line(m, lb, "\x1b[1z<image a.png url=\"https://x/\">   q"), "🖼️a.png   q");
+      Expect("the debt ends with the line", Line(m, lb, "     q"), "     q");
    }
    std::cout<<(failures ? "FAILURES: " : "all passed ")<<failures<<"\n";
    return failures!=0;

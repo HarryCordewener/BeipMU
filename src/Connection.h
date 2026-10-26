@@ -315,6 +315,7 @@ private:
    bool m_pueblo{};
    bool m_mxp{}; // MXP was negotiated on this connection
    Collection<MXP::Image> m_mxp_images; // From the line Display(ConstString) just parsed, drawn by Display(UniquePtr)
+   Collection<MXP::Image> m_mxp_figures; // Cell-sized pictures waiting for the rest of their rows, m_rows counts down
    void SendMXPReplies();
    bool m_raw_log_replay{}; // True when we're replaying a raw log (so no trigger sounds/sends/etc)
 

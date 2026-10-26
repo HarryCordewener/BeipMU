@@ -146,6 +146,7 @@ void Parser::BeginLine()
 
 void Parser::EndLine(Text::LineBuilder &line_builder)
 {
+   m_owed_blanks=0;
    CloseOpenModeTags(line_builder);
 
    // A link cannot reach into the next Text::Line, so a SEND or A left open ends here too
@@ -513,7 +514,7 @@ bool Parser::HandleAnchor(Text::HTMLParser &html, Text::LineBuilder &line_builde
 // The picture is drawn under the line by the connection, in an ImageBanner.
 bool Parser::HandleImage(Text::HTMLParser &html, Text::LineBuilder &line_builder)
 {
-   ConstString fname, url, type, height;
+   ConstString fname, url, type, height, width;
 
    Text::HTMLParser::Attribute attribute;
    while(true)
@@ -524,7 +525,8 @@ bool Parser::HandleImage(Text::HTMLParser &html, Text::LineBuilder &line_builder
          else if(IEquals(attribute.m_name, "url")) url=attribute.m_value;
          else if(IEquals(attribute.m_name, "t")) type=attribute.m_value;
          else if(IEquals(attribute.m_name, "h")) height=attribute.m_value;
-         // W, HSPACE, VSPACE, ALIGN, ISMAP: read and ignored
+         else if(IEquals(attribute.m_name, "w")) width=attribute.m_value;
+         // HSPACE, VSPACE, ALIGN, ISMAP: read and ignored
       }
       else if(ConstString value; html.ParseValue(value))
       {
@@ -539,20 +541,75 @@ bool Parser::HandleImage(Text::HTMLParser &html, Text::LineBuilder &line_builder
    if(!resolved)
       return true; // A tag we understood and refuse to fetch: drop it, don't show it
 
-   line_builder.AppendEmoji("🖼️");
-   line_builder.AppendString(DisplayName(fname));
-
    Image image;
    image.m_url=std::move(resolved);
    image.m_name=DisplayName(fname);
 
-   // H in pixels only. "8c" (character cells) has no meaning in a proportional font, use the default
-   unsigned pixels;
-   Streams::Input h(height);
-   if(h.Parse(pixels) && !h.CharSpy())
-      image.m_height=int(pixels<16 ? 16 : pixels>600 ? 600 : pixels)*g_dpiScale;
+   unsigned value;
+   bool in_cells;
+
+   if(ParseExtent(height, value, in_cells))
+   {
+      if(in_cells)
+         image.m_rows=int(value);
+      else
+         image.m_height=int(value<16 ? 16 : value>600 ? 600 : value)*g_dpiScale;
+   }
+
+   // A server that lays a figure out in cells (W=16c H=8c) follows the tag with that many
+   // blanks, and leaves the same columns blank on the rows under it. The label takes the
+   // place of blanks rather than being added to them, so a box drawn round the figure keeps
+   // its right edge. TextToLine swallows them through PayBlank.
+   ConstString name=image.m_name;
+   unsigned columns=0;
+   if(ParseExtent(width, value, in_cells) && in_cells)
+      columns=value;
+
+   static constexpr unsigned c_icon_cells=2; // 🖼️ is drawn two cells wide in a fixed font
+   if(columns && columns<c_icon_cells+1)
+   {
+      line_builder.AppendEmoji("🖼️");
+      m_owed_blanks=columns;
+   }
+   else if(columns && c_icon_cells+name.Count()>columns)
+   {
+      // Elide to fit: icon, as much of the name as fits, and an ellipsis
+      line_builder.AppendEmoji("🖼️");
+      line_builder.AppendString(name.First(columns-c_icon_cells-1));
+      line_builder.AppendString("…");
+      m_owed_blanks=columns;
+   }
+   else
+   {
+      line_builder.AppendEmoji("🖼️");
+      line_builder.AppendString(name);
+      m_owed_blanks=columns ? c_icon_cells+name.Count() : 0;
+   }
 
    m_images.Push(std::move(image));
+   return true;
+}
+
+// "120" is pixels, "8c" is character cells. Percentages are not supported.
+bool Parser::ParseExtent(ConstString text, unsigned &value, bool &in_cells)
+{
+   Streams::Input input(text);
+   if(!input.Parse(value))
+      return false;
+   in_cells=input.CharSkip('c') || input.CharSkip('C');
+   return !input.CharSpy();
+}
+
+bool Parser::PayBlank(char c)
+{
+   if(!m_owed_blanks)
+      return false;
+   if(c!=' ')
+   {
+      m_owed_blanks=0; // Text where the blanks should be: the server left no room, nothing more to swallow
+      return false;
+   }
+   m_owed_blanks--;
    return true;
 }
 
@@ -569,7 +626,7 @@ void Parser::HandleSupport()
    m_replies.Push(OwnedString(HybridStringBuilder<>(c_secure_line,
       "<SUPPORTS +b +bold +strong +i +italic +em +u +underline +s +strikeout +c +color"
       " +send +send.href +send.hint +send.prompt +a +a.href +br"
-      " +image +image.fname +image.url +image.t +image.h"
+      " +image +image.fname +image.url +image.t +image.h +image.w"
       " +version +support>\r\n")));
 }
 
