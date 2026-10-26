@@ -1233,30 +1233,15 @@ void Connection::AliasDebugText(ConstString background_color, ConstString stroke
 
 void Connection::Display(UniquePtr<Text::Line> &&p_line)
 {
-   // Taken first, so a line that returns early cannot leave its pictures for the next one
-   Collection<MXP::Image> mxp_images;
-
-   // A figure the server laid out in cells (H=8c) has rows of the box still to come. Putting
-   // the picture under its first row would cut the box in two, so it waits until the last row
-   // has arrived and goes under that: after the box rather than inside it.
-   for(unsigned i=0;i<m_mxp_figures.Count();)
-   {
-      if(--m_mxp_figures[i].m_rows>0)
-      {
-         i++;
-         continue;
-      }
-      mxp_images.Push(std::move(m_mxp_figures[i]));
-      m_mxp_figures.Delete(i);
-   }
-
+   // Taken first, so a line that returns early cannot leave its pictures for the next one.
+   // Pictures go under their line, except a figure laid out in cells (H=8c), which waits for
+   // the box round it to finish so the banner does not cut the box in two.
+   Collection<MXP::Image> mxp_images_above, mxp_images;
+   m_mxp_figures.Step(p_line->GetText(), mxp_images_above, mxp_images);
    for(auto &image : m_mxp_images)
    {
-      if(image.m_rows>1)
-      {
-         image.m_rows--; // This line was the first of them
-         m_mxp_figures.Push(std::move(image));
-      }
+      if(image.m_rows>0)
+         m_mxp_figures.Add(std::move(image));
       else
          mxp_images.Push(std::move(image));
    }
@@ -1403,7 +1388,7 @@ void Connection::Display(UniquePtr<Text::Line> &&p_line)
       }
    }
 
-   UniquePtr<Text::Line> p_image_line;
+   UniquePtr<Text::Line> p_image_line, p_image_line_above;
 
    if(g_ppropGlobal->fInlineImages())
    {
@@ -1413,21 +1398,21 @@ void Connection::Display(UniquePtr<Text::Line> &&p_line)
          auto p_banner=MakeCounting<ImageBanner>();
          for(auto &url : urls)
             p_banner->AddURL(std::move(url));
-
-         // MXP <IMAGE>: the label is in the line, the picture goes in the banner under it.
-         // A height the server asked for wins over the default; the tallest one if there are several.
-         int requested_height=0;
-         for(auto &image : mxp_images)
-         {
-            p_banner->AddURL(Text::ImageURL{ConstString(image.m_url)});
-            requested_height=std::max(requested_height, image.m_height);
-         }
-         if(requested_height)
-            p_banner->m_height=requested_height;
+         AddMXPImages(*p_banner, mxp_images);
 
          Text::LineBuilder line_builder;
          line_builder.AppendBanner(p_banner);
          p_image_line=line_builder.Create();
+      }
+
+      if(mxp_images_above.Count())
+      {
+         auto p_banner=MakeCounting<ImageBanner>();
+         AddMXPImages(*p_banner, mxp_images_above);
+
+         Text::LineBuilder line_builder;
+         line_builder.AppendBanner(p_banner);
+         p_image_line_above=line_builder.Create();
       }
    }
 
@@ -1476,9 +1461,25 @@ void Connection::Display(UniquePtr<Text::Line> &&p_line)
       p_wnd=p_spawn_window->mp_text;
    }
 
+   if(p_image_line_above)
+      p_wnd->Add(std::move(p_image_line_above));
    p_wnd->Add(std::move(p_line));
    if(p_image_line)
       p_wnd->Add(std::move(p_image_line));
+}
+
+// MXP <IMAGE>: the label is in the line, the picture goes in the banner.
+// A height the server asked for wins over the default; the tallest one if there are several.
+void Connection::AddMXPImages(ImageBanner &banner, Collection<MXP::Image> &images)
+{
+   int requested_height=0;
+   for(auto &image : images)
+   {
+      banner.AddURL(Text::ImageURL{ConstString(image.m_url)});
+      requested_height=std::max(requested_height, image.m_height);
+   }
+   if(requested_height)
+      banner.m_height=requested_height;
 }
 
 bool Connection::KillSpawnCapture()

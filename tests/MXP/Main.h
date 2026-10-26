@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdint>
+using uint8=std::uint8_t;
 
 namespace Strings { struct Result { static constexpr int Not_Found=-1; }; }
 
@@ -63,6 +65,7 @@ template<typename T> struct Collection
    std::vector<T> v;
    void Push(T t) { v.push_back(std::move(t)); }
    void Pop() { v.pop_back(); }
+   void Delete(unsigned i) { v.erase(v.begin()+i); }
    unsigned Count() const { return (unsigned)v.size(); }
    void Empty() { v.clear(); }
    T &operator[](unsigned i) { return v[i]; }

@@ -25,6 +25,22 @@ struct Image
    int m_rows{};   // H=8c: the server left this many rows for the picture, starting with the tag's own
 };
 
+// Cell-sized pictures (H=8c) waiting for the box drawn round them to finish. The server
+// reserved H rows starting with the tag's own; a picture drawn under any of them would cut
+// the box, so it waits until they have all arrived and then for the box's bottom edge.
+struct Figures
+{
+   void Add(Image &&image); // From the line the tag was on
+   void Empty() { m_waiting.Empty(); }
+
+   // Called for each line after the tag's. Pictures whose place has come are moved into
+   // above (draw before this line) or below (draw after it).
+   void Step(ConstString line, Collection<Image> &above, Collection<Image> &below);
+
+private:
+   Collection<Image> m_waiting; // m_rows counts the reserved rows still to come
+};
+
 struct Parser
 {
    void Reset(); // New connection, or ESC[3z

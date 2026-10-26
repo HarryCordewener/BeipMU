@@ -119,6 +119,28 @@ int main()
       Expect("no cell width swallows nothing", Line(m, lb, "\x1b[1z<image a.png url=\"https://x/\">   q"), "🖼️a.png   q");
       Expect("the debt ends with the line", Line(m, lb, "     q"), "     q");
    }
+   {
+      // A figure with H=3c in a bordered box: tag row, two more rows, then the bottom edge
+      auto run=[](std::vector<std::string> lines, int rows)
+      {
+         MXP::Figures figures;
+         MXP::Image image; image.m_url.s="u"; image.m_rows=rows;
+         figures.Add(std::move(image));
+         std::string where;
+         for(unsigned i=0;i<lines.size();i++)
+         {
+            Collection<MXP::Image> above, below;
+            figures.Step(ConstString(std::string_view(lines[i])), above, below);
+            if(above.Count()) where+="above "+std::to_string(i)+";";
+            if(below.Count()) where+="below "+std::to_string(i)+";";
+         }
+         return where;
+      };
+      Expect("figure waits for the bottom edge", run({"\u2502 Fountain \u2502", "\u2502 Benches  \u2502", "\u2514\u2500\u2500\u2518", "next"}, 3), "below 2;");
+      Expect("box text under the figure is waited out", run({"\u2502 a \u2502", "\u2502 b \u2502", "\u2502 more \u2502", "  \u2570\u2500\u256f", "x"}, 3), "below 3;");
+      Expect("no border: drawn above the first line after", run({"| a |", "| b |", "You see a fountain."}, 3), "above 2;");
+      Expect("H=1c in a box: under the bottom edge", run({"\u255a\u2550\u255d"}, 1), "below 0;");
+   }
    std::cout<<(failures ? "FAILURES: " : "all passed ")<<failures<<"\n";
    return failures!=0;
 }

@@ -9,6 +9,7 @@ struct SpawnWindow;
 struct Wnd_CaptureAbort;
 struct Log;
 struct Client_Media;
+struct ImageBanner;
 namespace GMCP
 {
 struct Avatar_Info;
@@ -315,8 +316,9 @@ private:
    bool m_pueblo{};
    bool m_mxp{}; // MXP was negotiated on this connection
    Collection<MXP::Image> m_mxp_images; // From the line Display(ConstString) just parsed, drawn by Display(UniquePtr)
-   Collection<MXP::Image> m_mxp_figures; // Cell-sized pictures waiting for the rest of their rows, m_rows counts down
+   MXP::Figures m_mxp_figures; // Cell-sized pictures waiting for the box round them to finish
    void SendMXPReplies();
+   void AddMXPImages(ImageBanner &banner, Collection<MXP::Image> &images);
    bool m_raw_log_replay{}; // True when we're replaying a raw log (so no trigger sounds/sends/etc)
 
    int m_connect_retries{};

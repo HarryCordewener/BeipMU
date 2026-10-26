@@ -613,6 +613,55 @@ bool Parser::PayBlank(char c)
    return true;
 }
 
+enum struct BoxLine { None, Edge, Bottom };
+
+// Whether a line is part of a box drawn in U+2500..U+257F, and if so whether it is the bottom edge
+static BoxLine ClassifyBoxLine(ConstString line)
+{
+   unsigned i=0;
+   while(i<line.Count() && line[i]==' ')
+      i++;
+   if(i+2>=line.Count() || uint8(line[i])!=0xE2 || (uint8(line[i+1])!=0x94 && uint8(line[i+1])!=0x95))
+      return BoxLine::None;
+
+   uint8 second=uint8(line[i+1]), third=uint8(line[i+2]);
+   bool bottom=(second==0x94 && (third==0x94 || third==0x97)) // └ ┗
+            || (second==0x95 && (third==0x98 || third==0x99 || third==0x9A || third==0xB0)); // ╘ ╙ ╚ ╰
+   return bottom ? BoxLine::Bottom : BoxLine::Edge;
+}
+
+void Figures::Add(Image &&image)
+{
+   image.m_rows--; // The tag's own line was the first reserved row
+   m_waiting.Push(std::move(image));
+}
+
+void Figures::Step(ConstString line, Collection<Image> &above, Collection<Image> &below)
+{
+   auto box=ClassifyBoxLine(line);
+
+   for(unsigned i=0;i<m_waiting.Count();)
+   {
+      auto &image=m_waiting[i];
+      if(image.m_rows>0)
+      {
+         image.m_rows--; // Another reserved row: the picture's place is still inside the box
+         i++;
+         continue;
+      }
+
+      if(box==BoxLine::Edge)
+      {
+         i++; // The box goes on below the picture's rows (text under it), wait for its bottom
+         continue;
+      }
+
+      // The bottom edge: draw after it. Anything else: the box has ended, draw before this line.
+      (box==BoxLine::Bottom ? below : above).Push(std::move(image));
+      m_waiting.Delete(i);
+   }
+}
+
 static constexpr ConstString c_secure_line="\x1B[1z";
 
 void Parser::HandleVersion()
