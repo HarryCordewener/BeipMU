@@ -53,10 +53,18 @@ OwnedString ResolveImageURL(ConstString fname, ConstString url, ConstString type
    if(!IsWebURL(url))
       return {};
 
+   // An absolute file name wins over the directory, the way a browser resolves it
+   if(IsWebURL(fname))
+      return OwnedString(fname);
+   if(fname.StartsWith('/'))
+      return {}; // Host-relative names need a real URL parser, refuse rather than guess
+
    // URL is a directory, T a subdirectory of it, FNAME the file in that
    HybridStringBuilder<> full(url);
    if(!url.EndsWith('/'))
       full('/');
+   while(type.StartsWith('/'))
+      type=type.WithoutFirst(1);
    if(type)
    {
       full(type);
@@ -64,13 +72,14 @@ OwnedString ResolveImageURL(ConstString fname, ConstString url, ConstString type
          full('/');
    }
 
-   // An absolute file name wins over the directory, the way a browser resolves it
-   if(IsWebURL(fname))
-      return OwnedString(fname);
-   if(fname.StartsWith('/'))
-      return {}; // Host-relative names need a real URL parser, refuse rather than guess
-
-   full(fname);
+   // A space is the one character file names have that a URL cannot carry as is
+   for(unsigned i=0;i<fname.Count();i++)
+   {
+      if(fname[i]==' ')
+         full("%20");
+      else
+         full(fname[i]);
+   }
    return OwnedString(full);
 }
 
@@ -81,11 +90,35 @@ static ConstString DisplayName(ConstString fname)
    ConstString name=fname;
    if(name.Split('?', left, right))
       name=left;
-   while(name.RSplit('/', left, right) && right)
+   while(name.EndsWith('/'))
+      name=name.WithoutLast(1);
+   if(name.RSplit('/', left, right))
       name=right;
    if(!name)
       return "image";
    return name;
+}
+
+// Cells a UTF-8 string takes in a fixed-width font, counting each code point as one
+static unsigned CellCount(ConstString text)
+{
+   unsigned cells=0;
+   for(unsigned i=0;i<text.Count();i++)
+      if((uint8(text[i])&0xC0)!=0x80) // Not a continuation byte
+         cells++;
+   return cells;
+}
+
+// The first 'cells' code points of a UTF-8 string, never cutting one in half
+static ConstString FirstCells(ConstString text, unsigned cells)
+{
+   unsigned i=0;
+   for(;i<text.Count();i++)
+   {
+      if((uint8(text[i])&0xC0)!=0x80 && cells--==0)
+         break;
+   }
+   return text.First(i);
 }
 
 // #rrggbb, or one of the sixteen names every MUD uses
@@ -224,9 +257,9 @@ bool Parser::ParseTag(Streams::Input &stream, Text::HTMLParser &html, Text::Line
    if(!html.ParseName(tag))
       return false;
 
-   // A secure tag on an open line is shown as typed. A closing tag is let through anywhere:
-   // it can only end something already open, and refusing it would leave a server's
-   // ESC[4z<SEND> running on into the player's text after it.
+   // A secure tag on an open line is shown as typed. Closing a link is let through: Close
+   // only lets it end a link opened on an open line, which is a server's ESC[4z<SEND>, and
+   // refusing it would leave that link running on into the player's text after it.
    bool closes_link=!start && (IEquals(tag, "send") || IEquals(tag, "a"));
    if(!secure && !IsOpenTag(tag) && !closes_link)
       return false;
@@ -236,38 +269,38 @@ bool Parser::ParseTag(Streams::Input &stream, Text::HTMLParser &html, Text::Line
 
    if(IEquals(tag, "b") || IEquals(tag, "bold") || IEquals(tag, "strong"))
    {
-      if(start) Open(Tag::Bold, line_builder, frame); else handled=Close(Tag::Bold, line_builder);
+      if(start) Open(Tag::Bold, line_builder, frame); else handled=Close(Tag::Bold, line_builder, secure);
    }
    else if(IEquals(tag, "i") || IEquals(tag, "italic") || IEquals(tag, "em"))
    {
-      if(start) Open(Tag::Italic, line_builder, frame); else handled=Close(Tag::Italic, line_builder);
+      if(start) Open(Tag::Italic, line_builder, frame); else handled=Close(Tag::Italic, line_builder, secure);
    }
    else if(IEquals(tag, "u") || IEquals(tag, "underline"))
    {
-      if(start) Open(Tag::Underline, line_builder, frame); else handled=Close(Tag::Underline, line_builder);
+      if(start) Open(Tag::Underline, line_builder, frame); else handled=Close(Tag::Underline, line_builder, secure);
    }
    else if(IEquals(tag, "s") || IEquals(tag, "strikeout"))
    {
-      if(start) Open(Tag::Strikeout, line_builder, frame); else handled=Close(Tag::Strikeout, line_builder);
+      if(start) Open(Tag::Strikeout, line_builder, frame); else handled=Close(Tag::Strikeout, line_builder, secure);
    }
    else if(IEquals(tag, "c") || IEquals(tag, "color"))
    {
-      if(start) handled=HandleColor(html, line_builder, frame); else handled=Close(Tag::Color, line_builder);
+      if(start) handled=HandleColor(html, line_builder, frame); else handled=Close(Tag::Color, line_builder, secure);
    }
    else if(IEquals(tag, "send"))
    {
-      if(start) handled=HandleSend(stream, html, line_builder); else handled=Close(Tag::Send, line_builder);
+      if(start) handled=HandleSend(stream, html, line_builder); else handled=Close(Tag::Send, line_builder, secure);
    }
    else if(IEquals(tag, "a"))
    {
-      if(start) handled=HandleAnchor(html, line_builder); else handled=Close(Tag::Anchor, line_builder);
+      if(start) handled=HandleAnchor(html, line_builder); else handled=Close(Tag::Anchor, line_builder, secure);
    }
    else if(!start)
       ; // </BR>, </VERSION>, an unknown close: nothing to do
    else if(IEquals(tag, "br"))
       line_builder.AppendNewLine();
    else if(IEquals(tag, "image"))
-      handled=HandleImage(html, line_builder);
+      handled=HandleImage(html, line_builder, CountBlanks(after));
    else if(IEquals(tag, "version"))
       HandleVersion();
    else if(IEquals(tag, "support"))
@@ -329,12 +362,14 @@ void Parser::Restore(const Frame &frame, Text::LineBuilder &line_builder)
       line_builder.SetURL(nullptr);
 }
 
-// Closes the innermost open frame for this tag, and everything opened inside it
-bool Parser::Close(Tag tag, Text::LineBuilder &line_builder)
+// Closes the innermost open frame for this tag, and everything opened inside it.
+// From an open line only a frame that was opened on an open line can be closed, so a
+// player's </B> or </SEND> cannot end markup the server opened on a secure line.
+bool Parser::Close(Tag tag, Text::LineBuilder &line_builder, bool secure)
 {
    for(unsigned i=m_stack.Count();i-->0;)
    {
-      if(m_stack[i].m_tag!=tag)
+      if(m_stack[i].m_tag!=tag || (!secure && !m_stack[i].m_opened_in_open_mode))
          continue;
 
       while(m_stack.Count()>i)
@@ -512,7 +547,9 @@ bool Parser::HandleAnchor(Text::HTMLParser &html, Text::LineBuilder &line_builde
 // The label goes in the line. If a SEND is open the label carries its command,
 // which is the spec's own <SEND showmap><IMAGE map.png></SEND> example.
 // The picture is drawn under the line by the connection, in an ImageBanner.
-bool Parser::HandleImage(Text::HTMLParser &html, Text::LineBuilder &line_builder)
+static constexpr unsigned c_icon_cells=2; // 🖼️ is drawn two cells wide in a fixed font
+
+bool Parser::HandleImage(Text::HTMLParser &html, Text::LineBuilder &line_builder, unsigned blanks_after)
 {
    ConstString fname, url, type, height, width;
 
@@ -560,30 +597,31 @@ bool Parser::HandleImage(Text::HTMLParser &html, Text::LineBuilder &line_builder
    // blanks, and leaves the same columns blank on the rows under it. The label takes the
    // place of blanks rather than being added to them, so a box drawn round the figure keeps
    // its right edge. TextToLine swallows them through PayBlank.
+   //
+   // A figure the server could not size in cells (a one-row description, W and H in pixels)
+   // still has its blanks, so when at least a label's worth follows the tag they are taken too.
    ConstString name=image.m_name;
+   unsigned name_cells=CellCount(name);
    unsigned columns=0;
    if(ParseExtent(width, value, in_cells) && in_cells)
       columns=value;
+   else if(blanks_after>=c_icon_cells+name_cells)
+      columns=blanks_after;
 
-   static constexpr unsigned c_icon_cells=2; // 🖼️ is drawn two cells wide in a fixed font
+   line_builder.AppendEmoji("🖼️");
    if(columns && columns<c_icon_cells+1)
-   {
-      line_builder.AppendEmoji("🖼️");
-      m_owed_blanks=columns;
-   }
-   else if(columns && c_icon_cells+name.Count()>columns)
+      m_owed_blanks=columns; // Room for the icon alone, and not quite that
+   else if(columns && c_icon_cells+name_cells>columns)
    {
       // Elide to fit: icon, as much of the name as fits, and an ellipsis
-      line_builder.AppendEmoji("🖼️");
-      line_builder.AppendString(name.First(columns-c_icon_cells-1));
+      line_builder.AppendString(FirstCells(name, columns-c_icon_cells-1));
       line_builder.AppendString("…");
       m_owed_blanks=columns;
    }
    else
    {
-      line_builder.AppendEmoji("🖼️");
       line_builder.AppendString(name);
-      m_owed_blanks=columns ? c_icon_cells+name.Count() : 0;
+      m_owed_blanks=columns ? c_icon_cells+name_cells : 0;
    }
 
    m_images.Push(std::move(image));
@@ -600,10 +638,21 @@ bool Parser::ParseExtent(ConstString text, unsigned &value, bool &in_cells)
    return !input.CharSpy();
 }
 
+// Spaces at the start of the text after a tag
+unsigned Parser::CountBlanks(ConstString text)
+{
+   unsigned i=0;
+   while(i<text.Count() && text[i]==' ')
+      i++;
+   return i;
+}
+
 bool Parser::PayBlank(char c)
 {
    if(!m_owed_blanks)
       return false;
+   if(c=='\x1B')
+      return false; // A colour change among the blanks is not text, the blanks carry on after it
    if(c!=' ')
    {
       m_owed_blanks=0; // Text where the blanks should be: the server left no room, nothing more to swallow

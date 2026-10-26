@@ -28,6 +28,7 @@ struct ConstString
    bool StartsWith(ConstString s) const { return v.substr(0, s.v.size())==s.v; }
    bool EndsWith(char c) const { return !v.empty() && v.back()==c; }
    bool IStartsWith(ConstString s) const { return v.size()>=s.v.size() && ieq(v.substr(0,s.v.size()), s.v); }
+   ConstString WithoutLast(unsigned n) const { return v.substr(0, v.size()-std::min<size_t>(n, v.size())); }
    ConstString First(unsigned n) const { return v.substr(0, std::min<size_t>(n, v.size())); }
    ConstString WithoutFirst(unsigned n) const { return v.substr(std::min<size_t>(n, v.size())); }
    int Find(ConstString s) const { auto p=v.find(s.v); return p==std::string_view::npos ? -1 : (int)p; }

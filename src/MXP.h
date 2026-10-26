@@ -86,14 +86,15 @@ private:
    bool IsSecure() const { return m_line_mode==Mode::Secure || m_temp_secure; }
 
    void Open(Tag tag, Text::LineBuilder &line_builder, Frame &frame);
-   bool Close(Tag tag, Text::LineBuilder &line_builder);
+   bool Close(Tag tag, Text::LineBuilder &line_builder, bool secure);
    void Restore(const Frame &frame, Text::LineBuilder &line_builder);
    void CloseOpenModeTags(Text::LineBuilder &line_builder);
 
    bool HandleSend(Streams::Input &stream, Text::HTMLParser &html, Text::LineBuilder &line_builder);
    bool HandleAnchor(Text::HTMLParser &html, Text::LineBuilder &line_builder);
    bool HandleColor(Text::HTMLParser &html, Text::LineBuilder &line_builder, Frame &frame);
-   bool HandleImage(Text::HTMLParser &html, Text::LineBuilder &line_builder);
+   bool HandleImage(Text::HTMLParser &html, Text::LineBuilder &line_builder, unsigned blanks_after);
+   static unsigned CountBlanks(ConstString text);
    static bool ParseExtent(ConstString text, unsigned &value, bool &in_cells);
    void HandleVersion();
    void HandleSupport();

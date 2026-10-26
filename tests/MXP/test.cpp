@@ -19,6 +19,7 @@ static std::string Line(MXP::Parser &mxp, Text::LineBuilder &lb, std::string_vie
       {
          case 27:
             if(mxp.ParseLineTag(stream, lb)) break;
+            if(stream.CharSkip('[')) { while(stream.CharSpy() && !isalpha(stream.CharSpy())) stream.CharGet(); stream.CharGet(); break; } // Stands in for AnsiParser
             lb.AppendString("<ESC>"); break;
          case '<':
             if(mxp.ParseTag(stream, html, lb)) break;
@@ -118,6 +119,23 @@ int main()
       Expect("text where the blanks should be is kept", Line(m, lb, "\x1b[1z<image a.png url=\"https://x/\" w=10c>xyz  q"), "🖼️a.pngxyz  q");
       Expect("no cell width swallows nothing", Line(m, lb, "\x1b[1z<image a.png url=\"https://x/\">   q"), "🖼️a.png   q");
       Expect("the debt ends with the line", Line(m, lb, "     q"), "     q");
+   }
+   {
+      MXP::Parser m; Text::LineBuilder lb;
+      Expect("a colour change among the blanks does not end them", Line(m, lb, "\x1b[1z|<image a.png url=\"https://x/\" w=10c h=2c>  \x1b[0m        |"), "|🖼️a.png   |");
+      Expect("eliding never cuts a character in half", Line(m, lb, "\x1b[1z|<image caf\u00e9caf\u00e9.png url=\"https://x/\" w=8c h=2c>        |"), "|🖼️caf\u00e9c…|");
+      Expect("a non-ASCII name is counted in characters", Line(m, lb, "\x1b[1z|<image \u00e9.png url=\"https://x/\" w=10c h=2c>          |"), "|🖼️\u00e9.png   |");
+      Expect("pixel-sized figure: the label still takes the blanks", Line(m, lb, "\x1b[1z|<image a.png url=\"https://x/\" w=320 h=24>            |"), "|🖼️a.png     |");
+      Expect("a few spaces after a picture are left alone", Line(m, lb, "\x1b[1z<image a.png url=\"https://x/\"> and text"), "🖼️a.png and text");
+      Line(m, lb, "\x1b[1z<image \"my map.png\" url=\"https://x/\" t=\"/maps\">");
+      Expect("spaces encoded, leading slash on T dropped", m.m_images.Count()==1 ? m.m_images[0].m_url.s : "", "https://x/maps/my%20map.png");
+      Line(m, lb, "\x1b[1z<image fname=\"https://x/pics/\">");
+      Expect("trailing slash: label is the last segment", m.m_images.Count()==1 ? m.m_images[0].m_name.s : "", "pics");
+   }
+   {
+      MXP::Parser m2; Text::LineBuilder lb2;
+      Expect("a player's </b> cannot close the server's bold", Line(m2, lb2, "\x1b[1z<b>\x1b[0zplayer</b> text"), "{B}player</b> text");
+      Expect("a player's </send> cannot end the server's link", Line(m2, lb2, "\x1b[1z<send href=\"x\">\x1b[0za</send>b"), "{link send:x|hint:}{U}a</send>b{/U}{/link}");
    }
    {
       // A figure with H=3c in a bordered box: tag row, two more rows, then the bottom edge
